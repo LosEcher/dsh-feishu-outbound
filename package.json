@@ -1,0 +1,25 @@
+{
+  "name": "dsh-feishu-outbound",
+  "version": "0.1.0",
+  "description": "DSH bundle: Feishu outbound push channel (de_channel_send/de_notify → feishu) via tenant_access_token + im/v1/messages.",
+  "type": "module",
+  "main": "index.mjs",
+  "files": ["index.mjs", "feishu-client.mjs", "cordis.patch.yml", "README.md", "LICENSE"],
+  "license": "MIT",
+  "scripts": {
+    "test": "node --test test/feishu-client.test.mjs"
+  },
+  "exports": {
+    ".": "./index.mjs",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": ">=4.0.0 <5.0.0"
+  }
+}

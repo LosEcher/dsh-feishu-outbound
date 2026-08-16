@@ -1,0 +1,14 @@
+# dsh-feishu-outbound bundle patch.
+# Install:  dsh plugin --profile web add link:/path/to/dsh-feishu-outbound
+# Row defined here; user patch may id-target override config (e.g. appId).
+# Secrets never live here: prefer LARK_APP_ID / LARK_APP_SECRET in the process env
+# (same pair as dsh-lark-channel).
+- insert:
+    - id: feishu-outbound
+      name: dsh-feishu-outbound
+      config:
+        # appId/appSecret: 留空 → apply() 回退 LARK_APP_ID / LARK_APP_SECRET 环境变量
+        # （与 dsh-lark-channel 同一对凭据，复用「零虾」自建应用）
+        # defaultTo: p2p:ou_xxx 或 group:oc_xxx —— de_channel_send 缺省目标
+        # （recentChat() 返回值；不配则 de_channel_send 必须显式传 target）
+        # defaultTo: p2p:ou_xxx
