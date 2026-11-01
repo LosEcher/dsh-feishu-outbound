@@ -38,9 +38,10 @@ export function apply(ctx, config = {}) {
 
   const CHANNEL_REGISTRY_KEY = '__dshChannelNotify'
   const outboundChannel = {
-    async send(target, content, _opts) {
+    /** opts: {kind?, pointer?} —— 投递预算场景与降级指针（见 feishu-client.sendText 头注释）。 */
+    async send(target, content, opts) {
       try {
-        return await client.sendText(resolveTarget(target, defaultTo), String(content ?? ''))
+        return await client.sendText(resolveTarget(target, defaultTo), String(content ?? ''), opts ?? {})
       } catch (error) {
         return { ok: false, error: error instanceof Error ? error.message : String(error) }
       }

@@ -4,10 +4,10 @@
   "description": "DSH bundle: Feishu outbound push channel (de_channel_send/de_notify → feishu) via tenant_access_token + im/v1/messages.",
   "type": "module",
   "main": "index.mjs",
-  "files": ["index.mjs", "feishu-client.mjs", "cordis.patch.yml", "README.md", "LICENSE"],
+  "files": ["index.mjs", "feishu-client.mjs", "delivery-budget.mjs", "cordis.patch.yml", "README.md", "LICENSE"],
   "license": "MIT",
   "scripts": {
-    "test": "node --test test/feishu-client.test.mjs"
+    "test": "node --test test/*.test.mjs"
   },
   "exports": {
     ".": "./index.mjs",

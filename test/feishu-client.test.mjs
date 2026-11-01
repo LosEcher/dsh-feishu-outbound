@@ -81,6 +81,58 @@ test('long text is chunked at 1500 chars', async (t) => {
   assert.ok(m.calls.messages.every((x) => JSON.parse(x.body.content).text.length <= 1500))
 })
 
+// ── T4：splitText 已被 delivery-budget.planDelivery 取代（分片带 [i/N] 序号） ──
+
+test('T4 分片：每条带 [i/N] 序号、连续完整，且**含序号**仍不超过 1500 字', async (t) => {
+  const m = mockFeishuServer()
+  await m.listen()
+  t.after(() => m.server.close())
+
+  const client = new FeishuClient({ appId: 'cli_x', appSecret: 's', apiBase: `http://127.0.0.1:${m.port}/open-apis` })
+  const texts = Array.from({ length: 200 }, (_, i) => `${i} 告警行${'x'.repeat(20)}`).join('\n') // ≈4.5k 字
+  const result = await client.sendText({ kind: 'p2p', id: 'ou_123' }, texts)
+
+  const sent = m.calls.messages.map((x) => JSON.parse(x.body.content).text)
+  assert.ok(sent.length > 1, '应当被分片')
+  for (const [i, s] of sent.entries()) {
+    assert.ok(s.startsWith(`[${i + 1}/${sent.length}]\n`), `第 ${i + 1} 条缺序号：${s.slice(0, 16)}`)
+    assert.ok(s.length <= 1500, `第 ${i + 1} 条 ${s.length} 字超过单条上限`)
+  }
+  assert.equal(result.delivery.mode, 'chunked')
+  assert.equal(result.delivery.parts, sent.length)
+  assert.equal(result.delivery.dropped.chars, 0)
+})
+
+test('T4 单片：短文本不加 [1/1]，且 delivery.mode=single', async (t) => {
+  const m = mockFeishuServer()
+  await m.listen()
+  t.after(() => m.server.close())
+
+  const client = new FeishuClient({ appId: 'cli_x', appSecret: 's', apiBase: `http://127.0.0.1:${m.port}/open-apis` })
+  const result = await client.sendText({ kind: 'p2p', id: 'ou_123' }, '短消息正文')
+  assert.equal(m.calls.messages.length, 1)
+  assert.equal(JSON.parse(m.calls.messages[0].body.content).text, '短消息正文')
+  assert.equal(result.delivery.mode, 'single')
+})
+
+test('T4 降级：kind=report 超预算 ⇒ 单片摘要（带指针），不再分片刷屏', async (t) => {
+  const m = mockFeishuServer()
+  await m.listen()
+  t.after(() => m.server.close())
+
+  const client = new FeishuClient({ appId: 'cli_x', appSecret: 's', apiBase: `http://127.0.0.1:${m.port}/open-apis` })
+  const big = Array.from({ length: 600 }, (_, i) => `| ${i} | 指标 |`).join('\n')
+  const result = await client.sendText({ kind: 'p2p', id: 'ou_123' }, big, {
+    kind: 'report',
+    pointer: 'https://example.com/report',
+  })
+  assert.equal(m.calls.messages.length, 1, '摘要降级只发一条')
+  const sent = JSON.parse(m.calls.messages[0].body.content).text
+  assert.ok(sent.includes('…（其余见）https://example.com/report'), '省略标记必须同行带指针')
+  assert.equal(result.delivery.mode, 'summary')
+  assert.ok(result.delivery.dropped.chars > 0, '丢弃必须可数')
+})
+
 test('token is cached across sends', async (t) => {
   const m = mockFeishuServer()
   await m.listen()

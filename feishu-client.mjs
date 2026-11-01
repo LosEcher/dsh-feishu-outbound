@@ -2,9 +2,22 @@
  * Pure Feishu OpenAPI client (no DSH dependency).
  * - tenant_access_token with 2h cache
  * - text / image / file message push via im/v1/messages
+ * - **文本投递按场景预算**（delivery-budget.planDelivery：单片/带序号分片/摘要/截断）
  */
 
+import { planDelivery } from './delivery-budget.mjs'
+
 const API_BASE = 'https://open.feishu.cn/open-apis';
+
+/**
+ * sendText 缺省场景 = alert。
+ *
+ * 为什么不是 report/chat：这个出口发出的绝大多数是通知与告警（磁盘水位、节点掉线、门禁红），
+ * 它们的坏法是"少一段就判断错"⇒ 按 alert 的完整性策略（宁可多片，超预算也显式承认截断）。
+ * 摘要型内容（日报/盘点）应由调用方显式传 opts.kind='report' 才降级为摘要 —— 默认降级会静默丢内容。
+ */
+const DEFAULT_KIND = 'alert'
+
 
 export class FeishuClient {
   constructor({ appId, appSecret, apiBase = API_BASE, fetchImpl = fetch }) {
@@ -41,10 +54,26 @@ export class FeishuClient {
     return target?.kind === 'group' ? 'chat_id' : 'open_id'
   }
 
-  async sendText(target, text) {
+  /**
+   * 文本发送（T4：分片由 delivery-budget 决定，不再在这里手切 1500）。
+   *
+   * @param {{kind:string,id:string}} target
+   * @param {string} text
+   * @param {object} [opts]
+   * @param {'alert'|'report'|'gate'|'chat'} [opts.kind] 场景（缺省 alert，见 DEFAULT_KIND）
+   * @param {string} [opts.pointer] 降级（summary/truncated）时的可回溯指针（链接/附件 key/台账路径）
+   */
+  async sendText(target, text, opts = {}) {
     const to = target?.id
     if (!to) return { ok: false, error: 'no target id for feishu send' }
-    const parts = splitText(String(text ?? ''))
+    // 唯一的切分/降级决策点：纯函数（可单测、可回滚）。parts 已满足「每片 ≤ 单条上限」，
+    // 分片带 [i/N] 序号；超预算则按 kind 降级，并把丢失量记在 dropped 里（可数）。
+    const plan = planDelivery({
+      text: String(text ?? ''),
+      kind: opts?.kind ?? DEFAULT_KIND,
+      pointer: opts?.pointer ?? '',
+    })
+    const parts = plan.parts
     let lastOk = null
     for (let i = 0; i < parts.length; i += 1) {
       const result = await this._postMessage(target, 'text', { text: parts[i] })
@@ -52,7 +81,8 @@ export class FeishuClient {
       lastOk = result
       if (i + 1 < parts.length) await sleep(400)
     }
-    return lastOk ?? { ok: false, error: 'empty content' }
+    const delivery = { kind: plan.kind, mode: plan.mode, parts: parts.length, dropped: plan.dropped, reason: plan.reason }
+    return lastOk ? { ...lastOk, delivery } : { ok: false, error: 'empty content' }
   }
 
   async sendMedia(target, media) {
@@ -143,34 +173,6 @@ export class FeishuClient {
     }
     return data.data.file_key
   }
-}
-
-/** Split long text into ≤1500-char chunks on newline boundaries, hard-splitting overlong single lines. */
-function splitText(text) {
-  if (text.length <= 1500) return [text]
-  const chunks = []
-  let current = ''
-  for (const line of text.split('\n')) {
-    if (line.length > 1500) {
-      // overlong single line: flush current, then hard-cut
-      if (current.length > 0) {
-        chunks.push(current)
-        current = ''
-      }
-      for (let i = 0; i < line.length; i += 1500) {
-        chunks.push(line.slice(i, i + 1500))
-      }
-      continue
-    }
-    if ((current + line).length > 1500 && current.length > 0) {
-      chunks.push(current)
-      current = line
-    } else {
-      current = current ? `${current}\n${line}` : line
-    }
-  }
-  if (current) chunks.push(current)
-  return chunks
 }
 
 function sleep(ms) {

@@ -24,6 +24,25 @@ DSH **outbound 推送**插件：把 DSH 的 `de_channel_send` / `de_notify` 接�
   - 图片：POST /open-apis/im/v1/images 上传 → im/v1/messages msg_type=image
   - 文件：POST /open-apis/im/v1/files 上传 → im/v1/messages msg_type=file
 - `index.mjs`：Cordis 插件本体，注册 `__dshChannelNotify.feishu`。
+- `delivery-budget.mjs`：**投递预算**（纯函数，T4 2026-11-01）。文本怎么发由场景决定，
+  不再一刀切切 1500：单片 / 带 `[i/N]` 序号的分片 / 摘要 / 截断，丢弃量可数
+  （`dropped.chars`）。三条不变量：分片必须有序号、降级必须留可回溯指针、截断不许伪装成完整。
+  设计依据 `dsfolder/FEISHU-DELIVERY-BUDGET-DESIGN-2026-11-01.md`。
+
+## 投递预算（send 的 opts）
+
+`send(target, content, { kind, pointer })` —— `opts` 会原样传给 `sendText`：
+
+| kind | 谁用 | 超预算时 |
+| --- | --- | --- |
+| `alert`（**缺省**） | 门禁红 / 节点掉线 / 额度告警 | 先分片（≤4 片）；再多就**截断并显式承认**（完整性优先，不摘要） |
+| `report` | 日报 / 盘点 | 分片 ≤2 片，再多降级为摘要 + 指针 |
+| `gate` | 门禁结论 | 不分片，单片摘要 |
+| `chat` | 对话式回复 | 不分片 |
+
+`pointer` = 降级时的可回溯指针（链接 / 附件 key / 台账路径）。**不传就会在正文里写
+「（未提供指针，属缺陷）」**，dsfolder 的 `feishu-copy-lint` 会把这种正文判红 —— 有意的：
+降级要么给去处，要么让门禁看得见。
 
 ## 启用
 
@@ -34,4 +53,5 @@ DSH **outbound 推送**插件：把 DSH 的 `de_channel_send` / `de_notify` 接�
 
 ## 测试
 
-`node --test test/feishu-client.test.mjs`（mock OpenAPI server）。
+`npm test`（= `node --test test/*.test.mjs`）：`feishu-client.test.mjs` 用 mock OpenAPI server
+验发送路径（含分片带序号、降级为摘要），`delivery-budget.test.mjs` 验纯函数与三条不变量。
