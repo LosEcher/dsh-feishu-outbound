@@ -69,6 +69,38 @@ export function withOrdinals(chunks) {
   return chunks.map((c, i) => `[${i + 1}/${chunks.length}]\n${c}`)
 }
 
+/** 序号前缀的最坏长度（对 N 片而言，最长的是 `[N/N]\n`）。 */
+function ordinalReserve(n) {
+  return `[${n}/${n}]\n`.length
+}
+
+/**
+ * 分片 + 加序号，且**每片加完序号后仍不超过单条上限**。
+ *
+ * 为什么需要这个而不用 `withOrdinals(chunkText(text, limit))`：序号是**发出去的正文的一部分**，
+ * 预算必须包含它。直接按 1500 切再前缀，每条会变成 1500+9 = 1509 字 —— 线上就是超限正文，
+ * 门禁也抓不到（E_CHUNK_NO_ORDINAL 只判"有没有序号"，带序号的超限片会被它放过）。
+ *
+ * 做法：先按整额切一次得到片数 n，再用 `limit - ordinalReserve(n)` 重切，直到片数稳定
+ * （预算变小 ⇒ 片数只增；n 一变前缀可能多一位，故迭代到不动点，最多 8 轮）。
+ */
+export function chunkWithOrdinals(text, limit = LIMITS.singleMaxChars) {
+  let chunks = chunkText(text, limit)
+  if (chunks.length <= 1) return chunks
+  let planned = chunks
+  for (let guard = 0; guard < 8; guard += 1) {
+    const n = chunks.length
+    const next = chunkText(text, limit - ordinalReserve(n))
+    planned = next
+    if (next.length === n) break
+    chunks = next
+  }
+  const parts = withOrdinals(planned)
+  // 兜底：极端输入（片数位数跳变）下若仍有超限片，按"预留 6 位片数 + 分隔符"重切。
+  if (parts.some((p) => p.length > limit)) return withOrdinals(chunkText(text, limit - 12))
+  return parts
+}
+
 /**
  * 场景感知的摘要：保留"开头（通常是结论）+ 结构行"，把中段压掉并标明去处。
  * @param text 原文
@@ -116,16 +148,20 @@ export function planDelivery(input) {
     return { mode: 'single', parts: [text], dropped: { chars: 0, blocks: 0 }, reason: 'within-single-limit', kind }
   }
 
-  const raw = chunkText(text, limits.singleMaxChars)
-  if (policy.chunk && raw.length <= maxChunks) {
+  // 片数必须按"加完序号后"的实数算：序号是正文的一部分，占预算 ⇒ 可能比整额切多一片。
+  // 允许分片的场景先按含序号的计划算；不允许分片的场景只做整额切（只为把 dropped.blocks 数出来）。
+  const chunkable = policy.chunk
+  const planned = chunkable ? chunkWithOrdinals(text, limits.singleMaxChars) : null
+  if (planned && planned.length <= maxChunks) {
     return {
       mode: 'chunked',
-      parts: withOrdinals(raw),
+      parts: planned,
       dropped: { chars: 0, blocks: 0 },
-      reason: `chunked ${raw.length}/${maxChunks}`,
+      reason: `chunked ${planned.length}/${maxChunks}`,
       kind,
     }
   }
+  const rawChunks = chunkable ? planned.length : chunkText(text, limits.singleMaxChars).length
 
   const maySummarize = allowSummary ?? policy.prefer !== 'completeness'
   if (maySummarize) {
@@ -133,8 +169,8 @@ export function planDelivery(input) {
     return {
       mode: 'summary',
       parts: [summary],
-      dropped: { chars: Math.max(0, chars - summary.length), blocks: Math.max(0, raw.length - 1) },
-      reason: `over-budget(${raw.length} chunks > ${maxChunks}) → summary`,
+      dropped: { chars: Math.max(0, chars - summary.length), blocks: Math.max(0, rawChunks - 1) },
+      reason: `over-budget(${rawChunks} chunks > ${maxChunks}) → summary`,
       kind,
     }
   }
@@ -145,8 +181,13 @@ export function planDelivery(input) {
   return {
     mode: 'truncated',
     parts: [truncated],
-    dropped: { chars: chars - cut.length, blocks: Math.max(0, raw.length - 1) },
-    reason: `over-budget(${raw.length} chunks > ${maxChunks}) → truncated (completeness policy)`,
+    dropped: { chars: chars - cut.length, blocks: Math.max(0, rawChunks - 1) },
+    reason: `over-budget(${rawChunks} chunks > ${maxChunks}) → truncated (completeness policy)`,
     kind,
   }
+}
+
+/** 实际会切出多少片（与分片路径同口径：允许分片时含序号前缀，否则按整额切）。 */
+function planChunkCount(text, limit, chunkable) {
+  return chunkable ? chunkWithOrdinals(text, limit).length : chunkText(text, limit).length
 }

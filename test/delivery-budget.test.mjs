@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { planDelivery, chunkText, withOrdinals, summarize, LIMITS } from '../delivery-budget.mjs'
+import { planDelivery, chunkText, withOrdinals, chunkWithOrdinals, summarize, LIMITS } from '../delivery-budget.mjs'
 
 const mk = (chars, word = '行') => Array.from({ length: Math.ceil(chars / 20) }, (_, i) => `${i} ${word}${'x'.repeat(18)}`).join('\n')
 
@@ -64,4 +64,35 @@ test('summarize 保留结论与关键行，且结果不超上限', () => {
   assert.ok(s.includes('# 结论'))
   assert.ok(s.includes('| a | 1 |'))
   assert.ok(s.includes('p'))
+})
+
+// ── T4（2026-11-01）接入前新增：序号是**发出去的正文的一部分**，预算必须含它 ──
+
+test('负向控制：先按整额切再加序号 ⇒ 会出现超限片（这就是不能直接接线的理由）', () => {
+  const text = mk(6000)
+  const naive = withOrdinals(chunkText(text, LIMITS.singleMaxChars))
+  assert.ok(
+    naive.some((p) => p.length > LIMITS.singleMaxChars),
+    '旧做法（整额切 + 加前缀）必须至少有一片超过单条上限，否则这条测试失去意义',
+  )
+})
+
+test('chunkWithOrdinals：每片**含序号**后仍不超过单条上限，且序号连续完整', () => {
+  const text = mk(6000)
+  const parts = chunkWithOrdinals(text, LIMITS.singleMaxChars)
+  assert.ok(parts.length > 1)
+  for (const [i, p] of parts.entries()) {
+    assert.ok(p.length <= LIMITS.singleMaxChars, `第 ${i + 1} 片 ${p.length} 字超限`)
+    assert.ok(p.startsWith(`[${i + 1}/${parts.length}]\n`), `第 ${i + 1} 片序号不对：${p.slice(0, 12)}`)
+  }
+  // 正文不丢：去掉序号后按换行拼回，应与原文等长（chunkText 只在行边界/硬切处断开）
+  const body = parts.map((p) => p.slice(p.indexOf('\n') + 1)).join('\n')
+  assert.equal(body.replace(/\n/g, '').length, text.replace(/\n/g, '').length)
+})
+
+test('planDelivery 分片模式下同样守住单条上限（接入 feishu-client 的真正前置条件）', () => {
+  for (const kind of ['alert', 'report']) {
+    const r = planDelivery({ text: mk(4000), kind })
+    for (const p of r.parts) assert.ok(p.length <= LIMITS.singleMaxChars, `${kind} 出现 ${p.length} 字的片`)
+  }
 })
